@@ -3,12 +3,30 @@ const express = require('express');
 const app = express();
 const PORT = process.env.PORT || 4444;
 
+const BIN_URL = `https://api.jsonbin.io/v3/b/${process.env.JSONBIN_BIN_ID}`;
+const BIN_HEADERS = {
+  'Content-Type': 'application/json',
+  'X-Master-Key': process.env.JSONBIN_API_KEY,
+};
+
+async function readEvents() {
+  const res = await fetch(`${BIN_URL}/latest`, { headers: BIN_HEADERS });
+  const data = await res.json();
+  return Array.isArray(data.record?.events) ? data.record.events : [];
+}
+
+async function writeEvents(events) {
+  await fetch(BIN_URL, {
+    method: 'PUT',
+    headers: BIN_HEADERS,
+    body: JSON.stringify({ events }),
+  });
+}
+
 app.use(express.text({ type: '*/*', limit: '10mb' }));
 
-const events = [];
-
-// Receive webhook from any provider
-app.post('/webhooks/:provider', (req, res) => {
+app.post('/webhooks/:provider', async (req, res) => {
+  const events = await readEvents();
   const event = {
     id: events.length + 1,
     provider: req.params.provider,
@@ -19,22 +37,22 @@ app.post('/webhooks/:provider', (req, res) => {
     bodyParsed: tryParse(req.body),
   };
   events.push(event);
+  await writeEvents(events);
   console.log(`[${event.timestamp}] ${event.provider} — event #${event.id}`);
   res.status(200).json({ ok: true });
 });
 
-// List all events (newest first)
-app.get('/webhooks', (req, res) => {
+app.get('/webhooks', async (req, res) => {
+  const events = await readEvents();
   res.json(events.slice().reverse());
 });
 
-// Filter by provider
-app.get('/webhooks/:provider', (req, res) => {
-  res.json(events.filter(e => e.provider === req.params.provider).slice().reverse());
+app.get('/webhooks/:provider', async (req, res) => {
+  const events = await readEvents();
+  res.json(events.filter(e => e.provider === req.params.provider).reverse());
 });
 
-// Simple HTML viewer
-app.get('/', (req, res) => {
+app.get('/', (_req, res) => {
   res.send(`<!DOCTYPE html>
 <html>
 <head>
@@ -149,9 +167,13 @@ function tryParse(body) {
   return null;
 }
 
-app.listen(PORT, () => {
-  console.log(`Webhook Inspector running on http://localhost:${PORT}`);
-  console.log(`  POST /webhooks/:provider  — receive`);
-  console.log(`  GET  /webhooks            — list all`);
-  console.log(`  GET  /                    — HTML viewer`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Webhook Inspector running on http://localhost:${PORT}`);
+    console.log(`  POST /webhooks/:provider  — receive`);
+    console.log(`  GET  /webhooks            — list all`);
+    console.log(`  GET  /                    — HTML viewer`);
+  });
+}
+
+module.exports = app;
